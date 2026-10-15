@@ -1,11 +1,21 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 
 class CreatePropertyScreen extends StatefulWidget {
-  const CreatePropertyScreen({super.key});
+  final Map<String, dynamic>? property;
+
+  const CreatePropertyScreen({
+    super.key,
+    this.property,
+  });
+
+  bool get isEditing => property != null;
 
   @override
   State<CreatePropertyScreen> createState() =>
@@ -22,6 +32,10 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
   final _neighborhoodController = TextEditingController();
   final _addressController = TextEditingController();
 
+  final ImagePicker _picker = ImagePicker();
+
+  List<XFile> selectedImages = [];
+
   String propertyType = 'apartment';
   String rentalType = 'complete_property';
   String currency = 'UYU';
@@ -34,25 +48,145 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
   bool isLoading = false;
 
   @override
-  void dispose() {
-    _titleController.dispose();
-    _descriptionController.dispose();
-    _priceController.dispose();
-    _cityController.dispose();
-    _neighborhoodController.dispose();
-    _addressController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+
+    final property = widget.property;
+
+    if (property != null) {
+      _titleController.text = property['title'] ?? '';
+      _descriptionController.text = property['description'] ?? '';
+      _priceController.text = '${property['price'] ?? ''}';
+      _cityController.text = property['city'] ?? '';
+      _neighborhoodController.text = property['neighborhood'] ?? '';
+      _addressController.text = property['address'] ?? '';
+
+      propertyType = property['property_type'] ?? 'apartment';
+      rentalType = property['rental_type'] ?? 'complete_property';
+      currency = property['currency'] ?? 'UYU';
+
+      bedrooms = property['bedrooms'] ?? 0;
+      bathrooms = property['bathrooms'] ?? 0;
+
+      furnished = property['furnished'] ?? false;
+      petsAllowed = property['pets_allowed'] ?? false;
+    }
   }
 
-  Future<void> _createProperty() async {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _pickImages() async {
+    try {
+      final images = await _picker.pickMultiImage(
+        imageQuality: 85,
+      );
 
-    final user = Supabase.instance.client.auth.currentUser;
+      if (images.isEmpty) return;
+
+      if (!mounted) return;
+
+      setState(() {
+        selectedImages.addAll(images);
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudieron seleccionar las imágenes: $error',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  void _removeImage(int index) {
+    setState(() {
+      selectedImages.removeAt(index);
+    });
+  }
+
+  String _getExtension(String path) {
+    final parts = path.split('.');
+
+    if (parts.length < 2) {
+      return 'jpg';
+    }
+
+    final extension = parts.last.toLowerCase();
+
+    if (extension == 'jpg' ||
+        extension == 'jpeg' ||
+        extension == 'png' ||
+        extension == 'webp') {
+      return extension;
+    }
+
+    return 'jpg';
+  }
+
+  Future<void> _uploadImages({
+    required String userId,
+    required String propertyId,
+  }) async {
+    if (selectedImages.isEmpty) return;
+
+    final supabase = Supabase.instance.client;
+
+    for (int index = 0; index < selectedImages.length; index++) {
+      final image = selectedImages[index];
+
+      final extension = _getExtension(image.path);
+
+      final timestamp =
+          DateTime.now().microsecondsSinceEpoch;
+
+      final fileName =
+          '${timestamp}_$index.$extension';
+
+      final storagePath =
+          '$userId/$propertyId/$fileName';
+
+      final file = File(image.path);
+
+      await supabase.storage
+          .from('property-images')
+          .upload(
+            storagePath,
+            file,
+            fileOptions: const FileOptions(
+              upsert: false,
+            ),
+          );
+
+      final publicUrl = supabase.storage
+          .from('property-images')
+          .getPublicUrl(storagePath);
+
+      await supabase
+          .from('property_images')
+          .insert({
+            'property_id': propertyId,
+            'image_url': publicUrl,
+            'position': index,
+          });
+    }
+  }
+
+  Future<void> _saveProperty() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
 
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No hay sesión activa.'),
+          content: Text(
+            'No hay una sesión activa.',
+          ),
         ),
       );
       return;
@@ -63,43 +197,99 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
     });
 
     try {
-      await Supabase.instance.client.from('properties').insert({
+      final propertyData = {
         'owner_id': user.id,
         'title': _titleController.text.trim(),
-        'description': _descriptionController.text.trim(),
+        'description':
+            _descriptionController.text.trim(),
         'property_type': propertyType,
         'rental_type': rentalType,
-        'price': double.parse(_priceController.text.replaceAll(',', '.')),
+        'price': double.parse(
+          _priceController.text.replaceAll(',', '.'),
+        ),
         'currency': currency,
         'bedrooms': bedrooms,
         'bathrooms': bathrooms,
         'city': _cityController.text.trim(),
-        'neighborhood': _neighborhoodController.text.trim().isEmpty
-            ? null
-            : _neighborhoodController.text.trim(),
-        'address': _addressController.text.trim().isEmpty
-            ? null
-            : _addressController.text.trim(),
+        'neighborhood':
+            _neighborhoodController.text.trim().isEmpty
+                ? null
+                : _neighborhoodController.text.trim(),
+        'address':
+            _addressController.text.trim().isEmpty
+                ? null
+                : _addressController.text.trim(),
         'furnished': furnished,
         'pets_allowed': petsAllowed,
-        'status': 'published',
-      });
+      };
+
+      late String propertyId;
+
+      if (widget.isEditing) {
+        propertyId =
+            widget.property!['id'] as String;
+
+        await supabase
+            .from('properties')
+            .update(propertyData)
+            .eq(
+              'id',
+              propertyId,
+            );
+      } else {
+        final createdProperty = await supabase
+            .from('properties')
+            .insert({
+              ...propertyData,
+              'status': 'published',
+            })
+            .select('id')
+            .single();
+
+        propertyId =
+            createdProperty['id'] as String;
+      }
+
+      await _uploadImages(
+        userId: user.id,
+        propertyId: propertyId,
+      );
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Propiedad publicada correctamente.'),
+        SnackBar(
+          content: Text(
+            widget.isEditing
+                ? 'Propiedad actualizada correctamente.'
+                : 'Propiedad publicada correctamente.',
+          ),
         ),
       );
 
-      Navigator.pop(context, true);
+      Navigator.pop(
+        context,
+        true,
+      );
+    } on StorageException catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Error al subir las imágenes: ${error.message}',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
     } on PostgrestException catch (error) {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error.message),
+          content: Text(
+            error.message,
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -108,7 +298,9 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Ocurrió un error: $error'),
+          content: Text(
+            'Ocurrió un error: $error',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -122,10 +314,26 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
   }
 
   @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _priceController.dispose();
+    _cityController.dispose();
+    _neighborhoodController.dispose();
+    _addressController.dispose();
+
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Publicar propiedad'),
+        title: Text(
+          widget.isEditing
+              ? 'Editar propiedad'
+              : 'Publicar propiedad',
+        ),
       ),
       body: SafeArea(
         child: Form(
@@ -144,12 +352,15 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                 controller: _titleController,
                 decoration: const InputDecoration(
                   labelText: 'Título',
-                  hintText: 'Ej: Apartamento luminoso en Pocitos',
+                  hintText:
+                      'Ej: Apartamento luminoso en Pocitos',
                 ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
+                  if (value == null ||
+                      value.trim().isEmpty) {
                     return 'Ingresá un título';
                   }
+
                   return null;
                 },
               ),
@@ -161,11 +372,12 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                 maxLines: 4,
                 decoration: const InputDecoration(
                   labelText: 'Descripción',
-                  hintText: 'Contá los detalles principales...',
+                  hintText:
+                      'Contá los detalles principales...',
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
 
               DropdownButtonFormField<String>(
                 initialValue: propertyType,
@@ -187,11 +399,11 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                   ),
                 ],
                 onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      propertyType = value;
-                    });
-                  }
+                  if (value == null) return;
+
+                  setState(() {
+                    propertyType = value;
+                  });
                 },
               ),
 
@@ -205,23 +417,29 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                 items: const [
                   DropdownMenuItem(
                     value: 'complete_property',
-                    child: Text('Propiedad completa'),
+                    child: Text(
+                      'Propiedad completa',
+                    ),
                   ),
                   DropdownMenuItem(
                     value: 'private_room',
-                    child: Text('Habitación privada'),
+                    child: Text(
+                      'Habitación privada',
+                    ),
                   ),
                   DropdownMenuItem(
                     value: 'shared_room',
-                    child: Text('Habitación compartida'),
+                    child: Text(
+                      'Habitación compartida',
+                    ),
                   ),
                 ],
                 onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      rentalType = value;
-                    });
-                  }
+                  if (value == null) return;
+
+                  setState(() {
+                    rentalType = value;
+                  });
                 },
               ),
 
@@ -240,22 +458,32 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                     flex: 2,
                     child: TextFormField(
                       controller: _priceController,
-                      keyboardType: const TextInputType.numberWithOptions(
+                      keyboardType:
+                          const TextInputType
+                              .numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Precio mensual',
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Precio mensual',
                       ),
                       validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
+                        if (value == null ||
+                            value.trim().isEmpty) {
                           return 'Ingresá el precio';
                         }
 
-                        final parsed = double.tryParse(
-                          value.replaceAll(',', '.'),
+                        final parsed =
+                            double.tryParse(
+                          value.replaceAll(
+                            ',',
+                            '.',
+                          ),
                         );
 
-                        if (parsed == null || parsed < 0) {
+                        if (parsed == null ||
+                            parsed < 0) {
                           return 'Precio inválido';
                         }
 
@@ -267,9 +495,12 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                   const SizedBox(width: 12),
 
                   Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child:
+                        DropdownButtonFormField<
+                            String>(
                       initialValue: currency,
-                      decoration: const InputDecoration(
+                      decoration:
+                          const InputDecoration(
                         labelText: 'Moneda',
                       ),
                       items: const [
@@ -283,11 +514,11 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                         ),
                       ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            currency = value;
-                          });
-                        }
+                        if (value == null) return;
+
+                        setState(() {
+                          currency = value;
+                        });
                       },
                     ),
                   ),
@@ -307,11 +538,11 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                 label: 'Dormitorios',
                 value: bedrooms,
                 onMinus: () {
-                  if (bedrooms > 0) {
-                    setState(() {
-                      bedrooms--;
-                    });
-                  }
+                  if (bedrooms <= 0) return;
+
+                  setState(() {
+                    bedrooms--;
+                  });
                 },
                 onPlus: () {
                   setState(() {
@@ -324,11 +555,11 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                 label: 'Baños',
                 value: bathrooms,
                 onMinus: () {
-                  if (bathrooms > 0) {
-                    setState(() {
-                      bathrooms--;
-                    });
-                  }
+                  if (bathrooms <= 0) return;
+
+                  setState(() {
+                    bathrooms--;
+                  });
                 },
                 onPlus: () {
                   setState(() {
@@ -339,7 +570,9 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
 
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Amoblado'),
+                title: const Text(
+                  'Amoblado',
+                ),
                 value: furnished,
                 onChanged: (value) {
                   setState(() {
@@ -350,7 +583,9 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
 
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Acepta mascotas'),
+                title: const Text(
+                  'Acepta mascotas',
+                ),
                 value: petsAllowed,
                 onChanged: (value) {
                   setState(() {
@@ -374,9 +609,11 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
                   labelText: 'Ciudad',
                 ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
+                  if (value == null ||
+                      value.trim().isEmpty) {
                     return 'Ingresá la ciudad';
                   }
+
                   return null;
                 },
               ),
@@ -384,7 +621,8 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
               const SizedBox(height: 16),
 
               TextFormField(
-                controller: _neighborhoodController,
+                controller:
+                    _neighborhoodController,
                 decoration: const InputDecoration(
                   labelText: 'Barrio',
                 ),
@@ -401,22 +639,139 @@ class _CreatePropertyScreenState extends State<CreatePropertyScreen> {
 
               const SizedBox(height: 32),
 
+              const Text(
+                'Fotos',
+                style: AppTextStyles.titleMedium,
+              ),
+
+              const SizedBox(height: 8),
+
+              const Text(
+                'Agregá fotos claras de la propiedad.',
+                style: AppTextStyles.bodyMedium,
+              ),
+
+              const SizedBox(height: 12),
+
+              OutlinedButton.icon(
+                onPressed:
+                    isLoading ? null : _pickImages,
+                icon: const Icon(
+                  Icons
+                      .add_photo_alternate_outlined,
+                ),
+                label: const Text(
+                  'Agregar fotos',
+                ),
+              ),
+
+              if (selectedImages.isNotEmpty) ...[
+                const SizedBox(height: 16),
+
+                Text(
+                  '${selectedImages.length} foto${selectedImages.length == 1 ? '' : 's'} seleccionada${selectedImages.length == 1 ? '' : 's'}',
+                  style: AppTextStyles.bodyMedium,
+                ),
+
+                const SizedBox(height: 12),
+
+                SizedBox(
+                  height: 110,
+                  child: ListView.separated(
+                    scrollDirection:
+                        Axis.horizontal,
+                    itemCount:
+                        selectedImages.length,
+                    separatorBuilder: (_, __) =>
+                        const SizedBox(
+                      width: 12,
+                    ),
+                    itemBuilder:
+                        (context, index) {
+                      final image =
+                          selectedImages[index];
+
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius:
+                                BorderRadius.circular(
+                              14,
+                            ),
+                            child: Image.file(
+                              File(image.path),
+                              width: 110,
+                              height: 110,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+
+                          Positioned(
+                            top: 5,
+                            right: 5,
+                            child: Container(
+                              decoration:
+                                  const BoxDecoration(
+                                color:
+                                    Colors.black54,
+                                shape:
+                                    BoxShape.circle,
+                              ),
+                              child: IconButton(
+                                onPressed: () {
+                                  _removeImage(
+                                    index,
+                                  );
+                                },
+                                icon: const Icon(
+                                  Icons.close,
+                                  color:
+                                      Colors.white,
+                                  size: 18,
+                                ),
+                                constraints:
+                                    const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding:
+                                    EdgeInsets.zero,
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 32),
+
               FilledButton(
-                onPressed: isLoading ? null : _createProperty,
+                onPressed:
+                    isLoading ? null : _saveProperty,
                 child: isLoading
                     ? const SizedBox(
                         width: 22,
                         height: 22,
-                        child: CircularProgressIndicator(
+                        child:
+                            CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: AppColors.white,
+                          color:
+                              AppColors.white,
                         ),
                       )
-                    : const Text(
-                        'Publicar propiedad',
-                        style: AppTextStyles.button,
+                    : Text(
+                        widget.isEditing
+                            ? 'Guardar cambios'
+                            : 'Publicar propiedad',
+                        style:
+                            AppTextStyles.button,
                       ),
               ),
+
+              const SizedBox(height: 24),
             ],
           ),
         ),
@@ -450,7 +805,9 @@ class _CounterRow extends StatelessWidget {
         ),
         IconButton(
           onPressed: onMinus,
-          icon: const Icon(Icons.remove_circle_outline),
+          icon: const Icon(
+            Icons.remove_circle_outline,
+          ),
         ),
         Text(
           '$value',
@@ -461,7 +818,9 @@ class _CounterRow extends StatelessWidget {
         ),
         IconButton(
           onPressed: onPlus,
-          icon: const Icon(Icons.add_circle_outline),
+          icon: const Icon(
+            Icons.add_circle_outline,
+          ),
         ),
       ],
     );
