@@ -1,5 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../../core/theme/app_colors.dart';
+import '../../../chat/presentation/screens/roomie_messages_page.dart';
 import '../pages/favorites_page.dart';
 import '../pages/profile_page.dart';
 import '../pages/roomie_home_page.dart';
@@ -16,51 +21,335 @@ class RoomieHomeScreen extends StatefulWidget {
 class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
   int currentIndex = 0;
 
-  final pages = const [
-    RoomieHomePage(),
-    SearchPage(),
-    RoomiesPage(),
-    FavoritesPage(),
-    ProfilePage(),
-  ];
+  Set<String> favoritePropertyIds = {};
+
+  int unreadMessagesCount = 0;
+
+  StreamSubscription<List<Map<String, dynamic>>>?
+      _messagesSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _loadFavorites();
+    _loadUnreadMessages();
+    _listenToMessages();
+  }
+
+  Future<void> _loadFavorites() async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+
+    if (user == null) return;
+
+    try {
+      final data = await supabase
+          .from('favorites')
+          .select('property_id')
+          .eq('user_id', user.id);
+
+      final ids = <String>{};
+
+      for (final item in data) {
+        final propertyId = item['property_id'];
+
+        if (propertyId != null) {
+          ids.add(propertyId.toString());
+        }
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        favoritePropertyIds = ids;
+      });
+    } catch (_) {
+      // Si falla, dejamos favoritos vacíos.
+    }
+  }
+
+  Future<void> _loadUnreadMessages() async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+
+    if (user == null) return;
+
+    try {
+      final conversations = await supabase
+          .from('conversations')
+          .select('id')
+          .eq(
+            'roomie_id',
+            user.id,
+          );
+
+      int total = 0;
+
+      for (final conversation in conversations) {
+        final conversationId =
+            conversation['id']?.toString();
+
+        if (conversationId == null) {
+          continue;
+        }
+
+        final unreadMessages = await supabase
+            .from('messages')
+            .select('id')
+            .eq(
+              'conversation_id',
+              conversationId,
+            )
+            .neq(
+              'sender_id',
+              user.id,
+            )
+            .isFilter(
+              'read_at',
+              null,
+            );
+
+        total += unreadMessages.length;
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        unreadMessagesCount = total;
+      });
+    } catch (error) {
+      debugPrint(
+        'ERROR UNREAD MESSAGES: $error',
+      );
+    }
+  }
+
+  void _listenToMessages() {
+    final supabase = Supabase.instance.client;
+
+    _messagesSubscription = supabase
+        .from('messages')
+        .stream(
+          primaryKey: ['id'],
+        )
+        .listen(
+      (_) {
+        _loadUnreadMessages();
+      },
+      onError: (error) {
+        debugPrint(
+          'REALTIME UNREAD ERROR: $error',
+        );
+      },
+    );
+  }
+
+  Future<void> _toggleFavorite(
+    String propertyId,
+  ) async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+
+    if (user == null) return;
+
+    final isFavorite =
+        favoritePropertyIds.contains(
+      propertyId,
+    );
+
+    try {
+      if (isFavorite) {
+        await supabase
+            .from('favorites')
+            .delete()
+            .eq(
+              'user_id',
+              user.id,
+            )
+            .eq(
+              'property_id',
+              propertyId,
+            );
+      } else {
+        await supabase
+            .from('favorites')
+            .insert({
+          'user_id': user.id,
+          'property_id': propertyId,
+        });
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        final updatedIds =
+            Set<String>.from(
+          favoritePropertyIds,
+        );
+
+        if (isFavorite) {
+          updatedIds.remove(
+            propertyId,
+          );
+        } else {
+          updatedIds.add(
+            propertyId,
+          );
+        }
+
+        favoritePropertyIds =
+            updatedIds;
+      });
+    } on PostgrestException catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content:
+              Text(error.message),
+          backgroundColor:
+              AppColors.error,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudo actualizar el favorito: $error',
+          ),
+          backgroundColor:
+              AppColors.error,
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _messagesSubscription?.cancel();
+
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      RoomieHomePage(
+        favoritePropertyIds:
+            favoritePropertyIds,
+        onToggleFavorite:
+            _toggleFavorite,
+      ),
+
+      SearchPage(
+        favoritePropertyIds:
+            favoritePropertyIds,
+        onToggleFavorite:
+            _toggleFavorite,
+      ),
+
+      const RoomiesPage(),
+
+      const RoomieMessagesPage(),
+
+      FavoritesPage(
+        favoritePropertyIds:
+            favoritePropertyIds,
+        onToggleFavorite:
+            _toggleFavorite,
+      ),
+
+      const ProfilePage(),
+    ];
+
     return Scaffold(
       body: IndexedStack(
         index: currentIndex,
         children: pages,
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: currentIndex,
-        onDestinationSelected: (index) {
+      bottomNavigationBar:
+          NavigationBar(
+        selectedIndex:
+            currentIndex,
+        onDestinationSelected:
+            (index) {
           setState(() {
             currentIndex = index;
           });
+
+          _loadUnreadMessages();
         },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(
+              Icons.home_outlined,
+            ),
+            selectedIcon: Icon(
+              Icons.home,
+            ),
             label: 'Inicio',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.search),
+
+          const NavigationDestination(
+            icon: Icon(
+              Icons.search,
+            ),
+            selectedIcon: Icon(
+              Icons.search,
+            ),
             label: 'Buscar',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.people_outline),
-            selectedIcon: Icon(Icons.people),
+
+          const NavigationDestination(
+            icon: Icon(
+              Icons.people_outline,
+            ),
+            selectedIcon: Icon(
+              Icons.people,
+            ),
             label: 'Roomies',
           ),
+
           NavigationDestination(
-            icon: Icon(Icons.favorite_border),
-            selectedIcon: Icon(Icons.favorite),
+            icon: Badge(
+              isLabelVisible:
+                  unreadMessagesCount > 0,
+              child: const Icon(
+                Icons.chat_bubble_outline,
+              ),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible:
+                  unreadMessagesCount > 0,
+              child: const Icon(
+                Icons.chat_bubble,
+              ),
+            ),
+            label: 'Mensajes',
+          ),
+
+          const NavigationDestination(
+            icon: Icon(
+              Icons.favorite_border,
+            ),
+            selectedIcon: Icon(
+              Icons.favorite,
+            ),
             label: 'Favoritos',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
+
+          const NavigationDestination(
+            icon: Icon(
+              Icons.person_outline,
+            ),
+            selectedIcon: Icon(
+              Icons.person,
+            ),
             label: 'Perfil',
           ),
         ],

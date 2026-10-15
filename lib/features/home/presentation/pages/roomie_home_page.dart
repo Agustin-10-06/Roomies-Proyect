@@ -3,9 +3,17 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../properties/presentation/screens/property_detail_screen.dart';
 
 class RoomieHomePage extends StatefulWidget {
-  const RoomieHomePage({super.key});
+  final Set<String> favoritePropertyIds;
+  final Future<void> Function(String propertyId) onToggleFavorite;
+
+  const RoomieHomePage({
+    super.key,
+    required this.favoritePropertyIds,
+    required this.onToggleFavorite,
+  });
 
   @override
   State<RoomieHomePage> createState() => _RoomieHomePageState();
@@ -13,21 +21,25 @@ class RoomieHomePage extends StatefulWidget {
 
 class _RoomieHomePageState extends State<RoomieHomePage> {
   String? userName;
+
   bool isLoadingName = true;
+  bool isLoadingProperties = true;
+
+  List<Map<String, dynamic>> properties = [];
 
   @override
   void initState() {
     super.initState();
+
     _loadUserName();
+    _loadProperties();
   }
 
   Future<void> _loadUserName() async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
 
-      if (user == null) {
-        return;
-      }
+      if (user == null) return;
 
       final profile = await Supabase.instance.client
           .from('profiles')
@@ -41,11 +53,58 @@ class _RoomieHomePageState extends State<RoomieHomePage> {
         userName = profile['full_name'] as String?;
       });
     } catch (_) {
-      // Por ahora dejamos un fallback silencioso.
+      // Fallback silencioso.
     } finally {
       if (mounted) {
         setState(() {
           isLoadingName = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadProperties() async {
+    try {
+      final data = await Supabase.instance.client
+          .from('properties')
+          .select('''
+            *,
+            property_images (
+              image_url,
+              position
+            )
+          ''')
+          .eq('status', 'published')
+          .order('created_at', ascending: false)
+          .limit(10);
+
+      if (!mounted) return;
+
+      setState(() {
+        properties = List<Map<String, dynamic>>.from(data);
+      });
+    } on PostgrestException catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudieron cargar las propiedades: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoadingProperties = false;
         });
       }
     }
@@ -59,105 +118,174 @@ class _RoomieHomePageState extends State<RoomieHomePage> {
 
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                isLoadingName ? 'Hola 👋' : 'Hola, $firstName 👋',
-                style: AppTextStyles.titleLarge,
-              ),
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await Future.wait([_loadUserName(), _loadProperties()]);
+          },
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isLoadingName ? 'Hola 👋' : 'Hola, $firstName 👋',
+                  style: AppTextStyles.titleLarge,
+                ),
 
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
 
-              const Text(
-                '¿Qué estás buscando hoy?',
-                style: AppTextStyles.bodyLarge,
-              ),
+                const Text(
+                  '¿Qué estás buscando hoy?',
+                  style: AppTextStyles.bodyLarge,
+                ),
 
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
 
-              TextField(
-                readOnly: true,
-                decoration: InputDecoration(
-                  hintText: 'Buscar alquileres, zonas...',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: IconButton(
-                    onPressed: () {},
-                    icon: const Icon(Icons.tune),
+                TextField(
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar alquileres, zonas...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                      onPressed: () {},
+                      icon: const Icon(Icons.tune),
+                    ),
                   ),
                 ),
-              ),
 
-              const SizedBox(height: 32),
+                const SizedBox(height: 32),
 
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Propiedades recomendadas',
-                      style: AppTextStyles.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Propiedades recomendadas',
+                        style: AppTextStyles.titleMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+
+                    const SizedBox(width: 8),
+
+                    TextButton(
+                      onPressed: () {},
+                      child: const Text('Ver todas'),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                if (isLoadingProperties)
+                  const SizedBox(
+                    height: 315,
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (properties.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: AppColors.white,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Column(
+                      children: [
+                        Icon(
+                          Icons.home_work_outlined,
+                          size: 48,
+                          color: AppColors.secondary,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'Todavía no hay propiedades publicadas.',
+                          textAlign: TextAlign.center,
+                          style: AppTextStyles.bodyLarge,
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 315,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: properties.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 16),
+                      itemBuilder: (context, index) {
+                        final property = properties[index];
+
+                        final propertyId = property['id'].toString();
+
+                        return _PropertyCard(
+                          property: property,
+                          isFavorite: widget.favoritePropertyIds.contains(
+                            propertyId,
+                          ),
+                          onFavoritePressed: () {
+                            widget.onToggleFavorite(propertyId);
+                          },
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => PropertyDetailScreen(
+                                  property: property,
+                                  isFavorite: widget.favoritePropertyIds
+                                      .contains(propertyId),
+                                  onToggleFavorite: widget.onToggleFavorite,
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
                     ),
                   ),
 
-                  const SizedBox(width: 8),
+                const SizedBox(height: 32),
 
-                  TextButton(onPressed: () {}, child: const Text('Ver todas')),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              SizedBox(
-                height: 285,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: 3,
-                  separatorBuilder: (_, __) => const SizedBox(width: 16),
-                  itemBuilder: (context, index) {
-                    return _PropertyCard(index: index);
-                  },
-                ),
-              ),
-
-              const SizedBox(height: 32),
-
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Roomies sugeridos',
-                      style: AppTextStyles.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Roomies sugeridos',
+                        style: AppTextStyles.titleMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
 
-                  const SizedBox(width: 8),
+                    const SizedBox(width: 8),
 
-                  TextButton(onPressed: () {}, child: const Text('Ver todos')),
-                ],
-              ),
+                    TextButton(
+                      onPressed: () {},
+                      child: const Text('Ver todos'),
+                    ),
+                  ],
+                ),
 
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-              const _RoomieCard(
-                name: 'Agustín',
-                age: 24,
-                description: 'Busca compartir apartamento en Montevideo.',
-              ),
+                const _RoomieCard(
+                  name: 'Agustín',
+                  age: 24,
+                  description: 'Busca compartir apartamento en Montevideo.',
+                ),
 
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
 
-              const _RoomieCard(
-                name: 'Lucía',
-                age: 26,
-                description: 'Busca roomie para Cordón o Parque Rodó.',
-              ),
-            ],
+                const _RoomieCard(
+                  name: 'Lucía',
+                  age: 26,
+                  description: 'Busca roomie para Cordón o Parque Rodó.',
+                ),
+
+                const SizedBox(height: 24),
+              ],
+            ),
           ),
         ),
       ),
@@ -166,34 +294,73 @@ class _RoomieHomePageState extends State<RoomieHomePage> {
 }
 
 class _PropertyCard extends StatelessWidget {
-  final int index;
+  final Map<String, dynamic> property;
+  final bool isFavorite;
+  final VoidCallback onTap;
+  final VoidCallback onFavoritePressed;
 
-  const _PropertyCard({required this.index});
+  const _PropertyCard({
+    required this.property,
+    required this.isFavorite,
+    required this.onTap,
+    required this.onFavoritePressed,
+  });
+
+  String? _getMainImageUrl() {
+    final rawImages = property['property_images'];
+
+    if (rawImages == null || rawImages is! List || rawImages.isEmpty) {
+      return null;
+    }
+
+    final images = List<Map<String, dynamic>>.from(rawImages);
+
+    images.sort((a, b) {
+      final aPosition = a['position'] as int? ?? 0;
+
+      final bPosition = b['position'] as int? ?? 0;
+
+      return aPosition.compareTo(bPosition);
+    });
+
+    final url = images.first['image_url'];
+
+    if (url == null || url.toString().trim().isEmpty) {
+      return null;
+    }
+
+    return url.toString();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final properties = [
-      {
-        'title': 'Apartamento en Cordón',
-        'zone': 'Cordón, Montevideo',
-        'price': '\$ 28.000 / mes',
-      },
-      {
-        'title': 'Habitación en Pocitos',
-        'zone': 'Pocitos, Montevideo',
-        'price': '\$ 15.500 / mes',
-      },
-      {
-        'title': 'Apartamento en Centro',
-        'zone': 'Centro, Montevideo',
-        'price': '\$ 31.000 / mes',
-      },
-    ];
+    final imageUrl = _getMainImageUrl();
 
-    final property = properties[index];
+    final neighborhood = property['neighborhood'];
+    final city = property['city'];
 
-    return Container(
-      width: 270,
+    String location = '';
+
+    if (neighborhood != null && neighborhood.toString().trim().isNotEmpty) {
+      location = neighborhood.toString();
+    }
+
+    if (city != null && city.toString().trim().isNotEmpty) {
+      if (location.isNotEmpty) {
+        location += ', ';
+      }
+
+      location += city.toString();
+    }
+
+    final currency = property['currency'] ?? 'UYU';
+
+    final price = property['price'] ?? 0;
+
+    return GestureDetector(
+  onTap: onTap,
+  child: Container(
+    width: 280,
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(22),
@@ -205,24 +372,42 @@ class _PropertyCard extends StatelessWidget {
           ),
         ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Stack(
             children: [
-              Container(
-                height: 155,
-                decoration: const BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.apartment_rounded,
-                    size: 64,
-                    color: AppColors.primary,
-                  ),
-                ),
+              SizedBox(
+                height: 160,
+                width: double.infinity,
+                child: imageUrl == null
+                    ? Container(
+                        color: AppColors.surface,
+                        child: const Center(
+                          child: Icon(
+                            Icons.apartment_rounded,
+                            size: 64,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      )
+                    : Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            color: AppColors.surface,
+                            child: const Center(
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                size: 52,
+                                color: AppColors.secondary,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
               ),
 
               Positioned(
@@ -234,9 +419,9 @@ class _PropertyCard extends StatelessWidget {
                     shape: BoxShape.circle,
                   ),
                   child: IconButton(
-                    onPressed: () {},
-                    icon: const Icon(
-                      Icons.favorite_border,
+                    onPressed: onFavoritePressed,
+                    icon: Icon(
+                      isFavorite ? Icons.favorite : Icons.favorite_border,
                       color: AppColors.primary,
                     ),
                   ),
@@ -245,58 +430,84 @@ class _PropertyCard extends StatelessWidget {
             ],
           ),
 
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  property['title']!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.location_on_outlined,
-                      size: 18,
-                      color: AppColors.textSecondary,
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    property['title'] ?? 'Sin título',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
                     ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        property['zone']!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTextStyles.bodyMedium,
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  if (location.isNotEmpty)
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_on_outlined,
+                          size: 18,
+                          color: AppColors.textSecondary,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            location,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.bodyMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                  const Spacer(),
+
+                  Text(
+                    '$currency $price / mes',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.bed_outlined,
+                        size: 18,
+                        color: AppColors.textSecondary,
                       ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                Text(
-                  property['price']!,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
+                      const SizedBox(width: 4),
+                      Text('${property['bedrooms'] ?? 0}'),
+                      const SizedBox(width: 16),
+                      const Icon(
+                        Icons.bathtub_outlined,
+                        size: 18,
+                        color: AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text('${property['bathrooms'] ?? 0}'),
+                    ],
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
       ),
+    ),
     );
   }
 }
