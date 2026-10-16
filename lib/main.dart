@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/theme/app_theme.dart';
-import 'features/auth/presentation/screens/welcome_screen.dart';
 import 'features/auth/presentation/screens/auth_gate.dart';
 
 Future<void> main() async {

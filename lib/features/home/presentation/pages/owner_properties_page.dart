@@ -342,7 +342,7 @@ class _OwnerPropertiesPageState extends State<OwnerPropertiesPage> {
                       itemCount:
                           properties.length,
                       separatorBuilder:
-                          (_, __) {
+                          (_, _) {
                         return const SizedBox(
                           height: 16,
                         );
