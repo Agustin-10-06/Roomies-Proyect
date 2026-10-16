@@ -202,7 +202,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
                       physics:
                           const AlwaysScrollableScrollPhysics(),
                       itemCount: favoriteProperties.length,
-                      separatorBuilder: (_, __) {
+                      separatorBuilder: (_, _) {
                         return const SizedBox(
                           height: 16,
                         );

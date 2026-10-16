@@ -24,14 +24,6 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
   StreamSubscription<List<Map<String, dynamic>>>?
       _messagesSubscription;
 
-  final pages = const [
-    OwnerHomePage(),
-    OwnerPropertiesPage(),
-    SizedBox.shrink(),
-    OwnerMessagesPage(),
-    OwnerProfilePage(),
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -116,11 +108,28 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
     );
   }
 
+  void _goToProperties() {
+    setState(() {
+      currentIndex = 1;
+    });
+
+    _loadUnreadMessages();
+  }
+
+  void _goToMessages() {
+    setState(() {
+      currentIndex = 3;
+    });
+
+    _loadUnreadMessages();
+  }
+
   Future<void> _openCreateProperty() async {
     final created = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => const CreatePropertyScreen(),
+        builder: (_) =>
+            const CreatePropertyScreen(),
       ),
     );
 
@@ -131,6 +140,8 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
         currentIndex = 1;
       });
     }
+
+    _loadUnreadMessages();
   }
 
   @override
@@ -142,6 +153,17 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      OwnerHomePage(
+        onOpenMessages: _goToMessages,
+        onOpenProperties: _goToProperties,
+      ),
+      const OwnerPropertiesPage(),
+      const SizedBox.shrink(),
+      const OwnerMessagesPage(),
+      const OwnerProfilePage(),
+    ];
+
     return Scaffold(
       body: IndexedStack(
         index: currentIndex,
@@ -196,6 +218,13 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
             icon: Badge(
               isLabelVisible:
                   unreadMessagesCount > 0,
+              label: unreadMessagesCount > 0
+                  ? Text(
+                      unreadMessagesCount > 99
+                          ? '99+'
+                          : '$unreadMessagesCount',
+                    )
+                  : null,
               child: const Icon(
                 Icons.chat_bubble_outline,
               ),
@@ -203,6 +232,13 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
             selectedIcon: Badge(
               isLabelVisible:
                   unreadMessagesCount > 0,
+              label: unreadMessagesCount > 0
+                  ? Text(
+                      unreadMessagesCount > 99
+                          ? '99+'
+                          : '$unreadMessagesCount',
+                    )
+                  : null,
               child: const Icon(
                 Icons.chat_bubble,
               ),

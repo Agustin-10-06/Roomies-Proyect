@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../roomie/presentation/screens/roomie_detail_screen.dart';
+import '../../../roomie/presentation/screens/roomie_requests_screen.dart';
 
 class RoomiesPage extends StatefulWidget {
   const RoomiesPage({super.key});
@@ -15,125 +19,239 @@ class _RoomiesPageState extends State<RoomiesPage> {
   final _searchController = TextEditingController();
 
   bool isLoading = true;
+  int pendingRequestsCount = 0;
 
   List<Map<String, dynamic>> allRoomies = [];
   List<Map<String, dynamic>> filteredRoomies = [];
+
+  StreamSubscription<List<Map<String, dynamic>>>?
+      _requestsSubscription;
 
   @override
   void initState() {
     super.initState();
 
     _loadRoomies();
+    _loadPendingRequests();
+    _listenToRequests();
 
-    _searchController.addListener(
-      _applySearch,
-    );
+    _searchController.addListener(_applySearch);
   }
 
-  Future<void> _loadRoomies() async {
+Future<void> _loadRoomies() async {
+  final supabase = Supabase.instance.client;
+  final user = supabase.auth.currentUser;
+
+  if (user == null) {
+    if (mounted) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+
+    return;
+  }
+
+  try {
+    final data = await supabase.rpc(
+      'get_public_roomies',
+    );
+
+    final loaded =
+        List<Map<String, dynamic>>.from(data);
+
+    // Buscamos solicitudes enviadas y recibidas.
+    final results = await Future.wait([
+      supabase
+          .from('roomie_requests')
+          .select(
+            'requester_id, target_id, status',
+          )
+          .eq(
+            'requester_id',
+            user.id,
+          ),
+      supabase
+          .from('roomie_requests')
+          .select(
+            'requester_id, target_id, status',
+          )
+          .eq(
+            'target_id',
+            user.id,
+          ),
+    ]);
+
+    final sentRequests =
+        List<Map<String, dynamic>>.from(
+      results[0],
+    );
+
+    final receivedRequests =
+        List<Map<String, dynamic>>.from(
+      results[1],
+    );
+
+    final hiddenRoomieIds = <String>{};
+
+    // Ocultamos Roomies a los que YO envié
+    // una solicitud pendiente o aceptada.
+    for (final request in sentRequests) {
+      final targetId =
+          request['target_id']?.toString();
+
+      final status =
+          request['status']?.toString();
+
+      if (targetId == null) {
+        continue;
+      }
+
+      if (status == 'pending' ||
+          status == 'accepted') {
+        hiddenRoomieIds.add(
+          targetId,
+        );
+      }
+    }
+
+    // Ocultamos Roomies que ME enviaron
+    // una solicitud pendiente o aceptada.
+    for (final request in receivedRequests) {
+      final requesterId =
+          request['requester_id']?.toString();
+
+      final status =
+          request['status']?.toString();
+
+      if (requesterId == null) {
+        continue;
+      }
+
+      if (status == 'pending' ||
+          status == 'accepted') {
+        hiddenRoomieIds.add(
+          requesterId,
+        );
+      }
+    }
+
+    // Dejamos solamente Roomies con los que
+    // todavía no existe solicitud pendiente
+    // ni aceptada.
+    final availableRoomies =
+        loaded.where((roomie) {
+      final roomieId =
+          roomie['user_id']?.toString();
+
+      if (roomieId == null) {
+        return false;
+      }
+
+      return !hiddenRoomieIds.contains(
+        roomieId,
+      );
+    }).toList();
+
+    if (!mounted) return;
+
+    setState(() {
+      allRoomies = availableRoomies;
+
+      filteredRoomies =
+          List<Map<String, dynamic>>.from(
+        availableRoomies,
+      );
+
+      isLoading = false;
+    });
+
+    _applySearch();
+  } on PostgrestException catch (error) {
+    if (!mounted) return;
+
+    setState(() {
+      isLoading = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          error.message,
+        ),
+        backgroundColor:
+            AppColors.error,
+      ),
+    );
+  } catch (error) {
+    if (!mounted) return;
+
+    setState(() {
+      isLoading = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'No se pudieron cargar los Roomies: $error',
+        ),
+        backgroundColor:
+            AppColors.error,
+      ),
+    );
+  }
+}
+
+  Future<void> _loadPendingRequests() async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
-    if (user == null) {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
-      return;
-    }
+    if (user == null) return;
 
     try {
       final data = await supabase
-          .from('roomie_profiles')
-          .select()
+          .from('roomie_requests')
+          .select('id')
           .eq(
-            'profile_completed',
-            true,
-          )
-          .eq(
-            'looking_for_roomie',
-            true,
-          )
-          .neq(
-            'user_id',
+            'target_id',
             user.id,
+          )
+          .eq(
+            'status',
+            'pending',
           );
 
-      final loaded =
-          List<Map<String, dynamic>>.from(
-        data,
-      );
-
-      final List<Map<String, dynamic>> result = [];
-
-      for (final roomie in loaded) {
-        final userId =
-            roomie['user_id']?.toString();
-
-        if (userId == null) {
-          continue;
-        }
-
-        try {
-          final publicProfile = await supabase
-              .rpc(
-                'get_public_profile',
-                params: {
-                  'profile_id': userId,
-                },
-              )
-              .single();
-
-          roomie['public_profile'] =
-              publicProfile;
-        } catch (_) {
-          roomie['public_profile'] = null;
-        }
-
-        result.add(roomie);
-      }
-
       if (!mounted) return;
 
       setState(() {
-        allRoomies = result;
-        filteredRoomies = result;
-        isLoading = false;
+        pendingRequestsCount = data.length;
       });
-    } on PostgrestException catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        isLoading = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            error.message,
-          ),
-          backgroundColor:
-              AppColors.error,
-        ),
-      );
     } catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        isLoading = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'No se pudieron cargar los Roomies: $error',
-          ),
-          backgroundColor:
-              AppColors.error,
-        ),
+      debugPrint(
+        'ERROR PENDING ROOMIE REQUESTS: $error',
       );
     }
+  }
+
+  void _listenToRequests() {
+    final supabase = Supabase.instance.client;
+
+    _requestsSubscription = supabase
+        .from('roomie_requests')
+        .stream(
+          primaryKey: ['id'],
+        )
+        .listen(
+      (_) {
+        _loadPendingRequests();
+        _loadRoomies();
+      },
+      onError: (error) {
+        debugPrint(
+          'REALTIME ROOMIE REQUESTS ERROR: $error',
+        );
+      },
+    );
   }
 
   void _applySearch() {
@@ -142,6 +260,8 @@ class _RoomiesPageState extends State<RoomiesPage> {
         .toLowerCase();
 
     if (query.isEmpty) {
+      if (!mounted) return;
+
       setState(() {
         filteredRoomies =
             List<Map<String, dynamic>>.from(
@@ -152,41 +272,39 @@ class _RoomiesPageState extends State<RoomiesPage> {
       return;
     }
 
-    final filtered = allRoomies.where(
-      (roomie) {
-        final publicProfile =
-            roomie['public_profile'];
+    final filtered =
+        allRoomies.where((roomie) {
+      final name =
+          roomie['full_name']
+                  ?.toString()
+                  .toLowerCase() ??
+              '';
 
-        final name =
-            publicProfile?['full_name']
-                    ?.toString()
-                    .toLowerCase() ??
-                '';
+      final occupation =
+          roomie['occupation']
+                  ?.toString()
+                  .toLowerCase() ??
+              '';
 
-        final occupation =
-            roomie['occupation']
-                    ?.toString()
-                    .toLowerCase() ??
-                '';
+      final zone =
+          roomie['preferred_zone']
+                  ?.toString()
+                  .toLowerCase() ??
+              '';
 
-        final zone =
-            roomie['preferred_zone']
-                    ?.toString()
-                    .toLowerCase() ??
-                '';
+      final bio =
+          roomie['bio']
+                  ?.toString()
+                  .toLowerCase() ??
+              '';
 
-        final bio =
-            roomie['bio']
-                    ?.toString()
-                    .toLowerCase() ??
-                '';
+      return name.contains(query) ||
+          occupation.contains(query) ||
+          zone.contains(query) ||
+          bio.contains(query);
+    }).toList();
 
-        return name.contains(query) ||
-            occupation.contains(query) ||
-            zone.contains(query) ||
-            bio.contains(query);
-      },
-    ).toList();
+    if (!mounted) return;
 
     setState(() {
       filteredRoomies = filtered;
@@ -194,29 +312,24 @@ class _RoomiesPageState extends State<RoomiesPage> {
   }
 
   int? _calculateAge(dynamic value) {
-    if (value == null) {
-      return null;
-    }
+    if (value == null) return null;
 
     final birthDate = DateTime.tryParse(
       value.toString(),
     );
 
-    if (birthDate == null) {
-      return null;
-    }
+    if (birthDate == null) return null;
 
     final now = DateTime.now();
 
-    int age =
-        now.year - birthDate.year;
+    int age = now.year - birthDate.year;
 
-    final alreadyHadBirthday =
+    final hadBirthday =
         now.month > birthDate.month ||
         (now.month == birthDate.month &&
             now.day >= birthDate.day);
 
-    if (!alreadyHadBirthday) {
+    if (!hadBirthday) {
       age--;
     }
 
@@ -249,13 +362,48 @@ class _RoomiesPageState extends State<RoomiesPage> {
       isLoading = true;
     });
 
-    await _loadRoomies();
+    await Future.wait([
+      _loadRoomies(),
+      _loadPendingRequests(),
+    ]);
+  }
 
-    _applySearch();
+  Future<void> _openRequests() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            const RoomieRequestsScreen(),
+      ),
+    );
+
+    await Future.wait([
+      _loadPendingRequests(),
+      _loadRoomies(),
+    ]);
+  }
+
+  Future<void> _openRoomieProfile(
+    Map<String, dynamic> roomie,
+  ) async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            RoomieDetailScreen(
+          roomie: roomie,
+        ),
+      ),
+    );
+
+    if (result == true) {
+      await _loadRoomies();
+    }
   }
 
   @override
   void dispose() {
+    _requestsSubscription?.cancel();
     _searchController.dispose();
 
     super.dispose();
@@ -268,6 +416,22 @@ class _RoomiesPageState extends State<RoomiesPage> {
         title: const Text(
           'Buscar Roomies',
         ),
+        actions: [
+          IconButton(
+            tooltip:
+                pendingRequestsCount > 0
+                    ? 'Tenés solicitudes pendientes'
+                    : 'Solicitudes',
+            onPressed: _openRequests,
+            icon: Badge(
+              isLabelVisible:
+                  pendingRequestsCount > 0,
+              child: const Icon(
+                Icons.person_add_alt_1_outlined,
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: isLoading
@@ -281,9 +445,7 @@ class _RoomiesPageState extends State<RoomiesPage> {
                   physics:
                       const AlwaysScrollableScrollPhysics(),
                   padding:
-                      const EdgeInsets.all(
-                    20,
-                  ),
+                      const EdgeInsets.all(20),
                   children: [
                     TextField(
                       controller:
@@ -293,9 +455,7 @@ class _RoomiesPageState extends State<RoomiesPage> {
                         hintText:
                             'Buscar por nombre, ocupación o zona...',
                         prefixIcon:
-                            Icon(
-                          Icons.search,
-                        ),
+                            Icon(Icons.search),
                       ),
                     ),
 
@@ -309,14 +469,16 @@ class _RoomiesPageState extends State<RoomiesPage> {
                           child: Text(
                             'Roomies sugeridos',
                             style:
-                                AppTextStyles.titleMedium,
+                                AppTextStyles
+                                    .titleMedium,
                           ),
                         ),
 
                         Text(
                           '${filteredRoomies.length}',
                           style:
-                              AppTextStyles.bodyMedium,
+                              AppTextStyles
+                                  .bodyMedium,
                         ),
                       ],
                     ),
@@ -346,6 +508,11 @@ class _RoomiesPageState extends State<RoomiesPage> {
                               _formatBudget(
                             roomie,
                           ),
+                          onOpen: () {
+                            _openRoomieProfile(
+                              roomie,
+                            );
+                          },
                         ),
                       ),
                   ],
@@ -360,21 +527,19 @@ class _RoomieCard extends StatelessWidget {
   final Map<String, dynamic> roomie;
   final int? age;
   final String budget;
+  final VoidCallback onOpen;
 
   const _RoomieCard({
     required this.roomie,
     required this.age,
     required this.budget,
+    required this.onOpen,
   });
 
   @override
   Widget build(BuildContext context) {
-    final publicProfile =
-        roomie['public_profile'];
-
     final name =
-        publicProfile?['full_name']
-                ?.toString() ??
+        roomie['full_name']?.toString() ??
             'Roomie';
 
     final photoUrl =
@@ -392,9 +557,7 @@ class _RoomieCard extends StatelessWidget {
             'Zona sin definir';
 
     final bio =
-        roomie['bio']
-                ?.toString() ??
-            '';
+        roomie['bio']?.toString() ?? '';
 
     final smoker =
         roomie['smoker'] as bool?;
@@ -416,25 +579,19 @@ class _RoomieCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius:
-            BorderRadius.circular(
-          20,
-        ),
+            BorderRadius.circular(20),
         border: Border.all(
           color: AppColors.surface,
         ),
       ),
       child: Padding(
         padding:
-            const EdgeInsets.all(
-          16,
-        ),
+            const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment:
               CrossAxisAlignment.start,
           children: [
             Row(
-              crossAxisAlignment:
-                  CrossAxisAlignment.center,
               children: [
                 CircleAvatar(
                   radius: 34,
@@ -481,8 +638,9 @@ class _RoomieCard extends StatelessWidget {
                           fontSize: 18,
                           fontWeight:
                               FontWeight.w700,
-                          color: AppColors
-                              .textPrimary,
+                          color:
+                              AppColors
+                                  .textPrimary,
                         ),
                       ),
 
@@ -497,7 +655,8 @@ class _RoomieCard extends StatelessWidget {
                             TextOverflow
                                 .ellipsis,
                         style:
-                            AppTextStyles.bodyMedium,
+                            AppTextStyles
+                                .bodyMedium,
                       ),
 
                       const SizedBox(
@@ -510,12 +669,14 @@ class _RoomieCard extends StatelessWidget {
                             Icons
                                 .location_on_outlined,
                             size: 16,
-                            color: AppColors
-                                .secondary,
+                            color:
+                                AppColors.secondary,
                           ),
+
                           const SizedBox(
                             width: 3,
                           ),
+
                           Expanded(
                             child: Text(
                               zone,
@@ -541,7 +702,8 @@ class _RoomieCard extends StatelessWidget {
             ),
 
             Container(
-              width: double.infinity,
+              width:
+                  double.infinity,
               padding:
                   const EdgeInsets.all(
                 12,
@@ -595,7 +757,8 @@ class _RoomieCard extends StatelessWidget {
                     TextOverflow
                         .ellipsis,
                 style:
-                    AppTextStyles.bodyMedium,
+                    AppTextStyles
+                        .bodyMedium,
               ),
             ],
 
@@ -649,20 +812,13 @@ class _RoomieCard extends StatelessWidget {
             ),
 
             SizedBox(
-              width: double.infinity,
+              width:
+                  double.infinity,
               child: FilledButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'En el próximo paso abrimos el perfil completo del Roomie.',
-                      ),
-                    ),
-                  );
-                },
-                child: const Text(
+                onPressed:
+                    onOpen,
+                child:
+                    const Text(
                   'Ver perfil',
                 ),
               ),
@@ -692,7 +848,8 @@ class _RoomieTag extends StatelessWidget {
         vertical: 7,
       ),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color:
+            AppColors.surface,
         borderRadius:
             BorderRadius.circular(
           30,
@@ -708,9 +865,11 @@ class _RoomieTag extends StatelessWidget {
             color:
                 AppColors.primary,
           ),
+
           const SizedBox(
             width: 5,
           ),
+
           Text(
             text,
             style:
@@ -726,7 +885,8 @@ class _RoomieTag extends StatelessWidget {
   }
 }
 
-class _EmptyRoomies extends StatelessWidget {
+class _EmptyRoomies
+    extends StatelessWidget {
   final bool hasSearch;
 
   const _EmptyRoomies({
@@ -770,7 +930,7 @@ class _EmptyRoomies extends StatelessWidget {
           Text(
             hasSearch
                 ? 'Probá buscando otra zona, nombre u ocupación.'
-                : 'Cuando otros usuarios completen su perfil y activen "Estoy buscando Roomie", aparecerán acá.',
+                : 'Cuando otros usuarios activen la búsqueda de Roomie, aparecerán acá.',
             textAlign:
                 TextAlign.center,
             style:

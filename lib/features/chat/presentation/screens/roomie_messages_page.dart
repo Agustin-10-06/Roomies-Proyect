@@ -350,7 +350,7 @@ class _RoomieMessagesPageState extends State<RoomieMessagesPage> {
                     itemCount:
                         conversations.length,
                     separatorBuilder:
-                        (_, __) =>
+                        (_, _) =>
                             const SizedBox(
                       height: 12,
                     ),

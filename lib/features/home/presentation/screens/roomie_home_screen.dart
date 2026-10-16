@@ -12,18 +12,24 @@ import '../pages/roomies_page.dart';
 import '../pages/search_page.dart';
 
 class RoomieHomeScreen extends StatefulWidget {
-  const RoomieHomeScreen({super.key});
+  const RoomieHomeScreen({
+    super.key,
+  });
 
   @override
-  State<RoomieHomeScreen> createState() => _RoomieHomeScreenState();
+  State<RoomieHomeScreen> createState() =>
+      _RoomieHomeScreenState();
 }
 
-class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
+class _RoomieHomeScreenState
+    extends State<RoomieHomeScreen> {
   int currentIndex = 0;
 
   Set<String> favoritePropertyIds = {};
 
   int unreadMessagesCount = 0;
+
+  String rentalSearchQuery = '';
 
   StreamSubscription<List<Map<String, dynamic>>>?
       _messagesSubscription;
@@ -38,28 +44,41 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
   }
 
   Future<void> _loadFavorites() async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+    final supabase =
+        Supabase.instance.client;
 
-    if (user == null) return;
+    final user =
+        supabase.auth.currentUser;
+
+    if (user == null) {
+      return;
+    }
 
     try {
       final data = await supabase
           .from('favorites')
           .select('property_id')
-          .eq('user_id', user.id);
+          .eq(
+            'user_id',
+            user.id,
+          );
 
       final ids = <String>{};
 
       for (final item in data) {
-        final propertyId = item['property_id'];
+        final propertyId =
+            item['property_id'];
 
         if (propertyId != null) {
-          ids.add(propertyId.toString());
+          ids.add(
+            propertyId.toString(),
+          );
         }
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         favoritePropertyIds = ids;
@@ -70,10 +89,15 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
   }
 
   Future<void> _loadUnreadMessages() async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+    final supabase =
+        Supabase.instance.client;
 
-    if (user == null) return;
+    final user =
+        supabase.auth.currentUser;
+
+    if (user == null) {
+      return;
+    }
 
     try {
       final conversations = await supabase
@@ -86,37 +110,44 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
 
       int total = 0;
 
-      for (final conversation in conversations) {
+      for (final conversation
+          in conversations) {
         final conversationId =
-            conversation['id']?.toString();
+            conversation['id']
+                ?.toString();
 
         if (conversationId == null) {
           continue;
         }
 
-        final unreadMessages = await supabase
-            .from('messages')
-            .select('id')
-            .eq(
-              'conversation_id',
-              conversationId,
-            )
-            .neq(
-              'sender_id',
-              user.id,
-            )
-            .isFilter(
-              'read_at',
-              null,
-            );
+        final unreadMessages =
+            await supabase
+                .from('messages')
+                .select('id')
+                .eq(
+                  'conversation_id',
+                  conversationId,
+                )
+                .neq(
+                  'sender_id',
+                  user.id,
+                )
+                .isFilter(
+                  'read_at',
+                  null,
+                );
 
-        total += unreadMessages.length;
+        total +=
+            unreadMessages.length;
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
-        unreadMessagesCount = total;
+        unreadMessagesCount =
+            total;
       });
     } catch (error) {
       debugPrint(
@@ -126,7 +157,8 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
   }
 
   void _listenToMessages() {
-    final supabase = Supabase.instance.client;
+    final supabase =
+        Supabase.instance.client;
 
     _messagesSubscription = supabase
         .from('messages')
@@ -148,10 +180,15 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
   Future<void> _toggleFavorite(
     String propertyId,
   ) async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+    final supabase =
+        Supabase.instance.client;
 
-    if (user == null) return;
+    final user =
+        supabase.auth.currentUser;
+
+    if (user == null) {
+      return;
+    }
 
     final isFavorite =
         favoritePropertyIds.contains(
@@ -175,12 +212,16 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
         await supabase
             .from('favorites')
             .insert({
-          'user_id': user.id,
-          'property_id': propertyId,
+          'user_id':
+              user.id,
+          'property_id':
+              propertyId,
         });
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         final updatedIds =
@@ -202,19 +243,24 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
             updatedIds;
       });
     } on PostgrestException catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context)
           .showSnackBar(
         SnackBar(
-          content:
-              Text(error.message),
+          content: Text(
+            error.message,
+          ),
           backgroundColor:
               AppColors.error,
         ),
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context)
           .showSnackBar(
@@ -229,28 +275,103 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
     }
   }
 
+  void _goToHome() {
+    setState(() {
+      currentIndex = 0;
+    });
+  }
+
+  void _goToRentals() {
+    setState(() {
+      currentIndex = 1;
+
+      // Si entra manualmente a Alquileres,
+      // mostramos todos.
+      rentalSearchQuery = '';
+    });
+  }
+
+  void _searchRentals(
+    String query,
+  ) {
+    final cleanQuery =
+        query.trim();
+
+    if (cleanQuery.isEmpty) {
+      _goToRentals();
+      return;
+    }
+
+    setState(() {
+      rentalSearchQuery =
+          cleanQuery;
+
+      currentIndex = 1;
+    });
+  }
+
+  void _goToRoomies() {
+    setState(() {
+      currentIndex = 2;
+    });
+  }
+
+  void _goToMessages() {
+    setState(() {
+      currentIndex = 3;
+    });
+
+    _loadUnreadMessages();
+  }
+
+  void _goToFavorites() {
+    setState(() {
+      currentIndex = 4;
+    });
+  }
+
+  void _goToProfile() {
+    setState(() {
+      currentIndex = 5;
+    });
+  }
+
   @override
   void dispose() {
-    _messagesSubscription?.cancel();
+    _messagesSubscription
+        ?.cancel();
 
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     final pages = [
       RoomieHomePage(
         favoritePropertyIds:
             favoritePropertyIds,
         onToggleFavorite:
             _toggleFavorite,
+        onOpenRentals:
+            _goToRentals,
+        onOpenRoomies:
+            _goToRoomies,
+        onSearchRentals:
+            _searchRentals,
       ),
 
       SearchPage(
+        key: ValueKey(
+          rentalSearchQuery,
+        ),
         favoritePropertyIds:
             favoritePropertyIds,
         onToggleFavorite:
             _toggleFavorite,
+        initialQuery:
+            rentalSearchQuery,
       ),
 
       const RoomiesPage(),
@@ -269,8 +390,10 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
 
     return Scaffold(
       body: IndexedStack(
-        index: currentIndex,
-        children: pages,
+        index:
+            currentIndex,
+        children:
+            pages,
       ),
       bottomNavigationBar:
           NavigationBar(
@@ -278,79 +401,116 @@ class _RoomieHomeScreenState extends State<RoomieHomeScreen> {
             currentIndex,
         onDestinationSelected:
             (index) {
-          setState(() {
-            currentIndex = index;
-          });
+          switch (index) {
+            case 0:
+              _goToHome();
+              break;
 
-          _loadUnreadMessages();
+            case 1:
+              _goToRentals();
+              break;
+
+            case 2:
+              _goToRoomies();
+              break;
+
+            case 3:
+              _goToMessages();
+              break;
+
+            case 4:
+              _goToFavorites();
+              break;
+
+            case 5:
+              _goToProfile();
+              break;
+          }
         },
         destinations: [
           const NavigationDestination(
             icon: Icon(
               Icons.home_outlined,
             ),
-            selectedIcon: Icon(
+            selectedIcon:
+                Icon(
               Icons.home,
             ),
-            label: 'Inicio',
+            label:
+                'Inicio',
           ),
 
           const NavigationDestination(
             icon: Icon(
-              Icons.search,
+              Icons.apartment_outlined,
             ),
-            selectedIcon: Icon(
-              Icons.search,
+            selectedIcon:
+                Icon(
+              Icons.apartment,
             ),
-            label: 'Buscar',
+            label:
+                'Alquileres',
           ),
 
           const NavigationDestination(
             icon: Icon(
               Icons.people_outline,
             ),
-            selectedIcon: Icon(
+            selectedIcon:
+                Icon(
               Icons.people,
             ),
-            label: 'Roomies',
+            label:
+                'Roomies',
           ),
 
           NavigationDestination(
             icon: Badge(
               isLabelVisible:
-                  unreadMessagesCount > 0,
-              child: const Icon(
-                Icons.chat_bubble_outline,
+                  unreadMessagesCount >
+                      0,
+              child:
+                  const Icon(
+                Icons
+                    .chat_bubble_outline,
               ),
             ),
-            selectedIcon: Badge(
+            selectedIcon:
+                Badge(
               isLabelVisible:
-                  unreadMessagesCount > 0,
-              child: const Icon(
+                  unreadMessagesCount >
+                      0,
+              child:
+                  const Icon(
                 Icons.chat_bubble,
               ),
             ),
-            label: 'Mensajes',
+            label:
+                'Mensajes',
           ),
 
           const NavigationDestination(
             icon: Icon(
               Icons.favorite_border,
             ),
-            selectedIcon: Icon(
+            selectedIcon:
+                Icon(
               Icons.favorite,
             ),
-            label: 'Favoritos',
+            label:
+                'Favoritos',
           ),
 
           const NavigationDestination(
             icon: Icon(
               Icons.person_outline,
             ),
-            selectedIcon: Icon(
+            selectedIcon:
+                Icon(
               Icons.person,
             ),
-            label: 'Perfil',
+            label:
+                'Perfil',
           ),
         ],
       ),
